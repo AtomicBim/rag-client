@@ -5,7 +5,7 @@ import traceback
 import config
 import win32com.client as win32
 import sys
-import json # <-- Используем JSON для файла состояния
+import json
 from datetime import datetime
 
 from unstructured.partition.docx import partition_docx
@@ -14,7 +14,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from pypdf import PdfReader
 
-# --- НОВОЕ: Имя файла для хранения состояния индексации ---
+# Файл для хранения состояния индексации
 STATE_FILE = "indexing_state.json"
 
 def load_state():
@@ -24,7 +24,7 @@ def load_state():
             try:
                 return json.load(f)
             except json.JSONDecodeError:
-                return {} # Если файл пуст или поврежден
+                return {}
     return {}
 
 def save_state(state):
@@ -104,7 +104,7 @@ def main():
         print(f"❌ ОШИБКА: Не удалось подключиться к Qdrant или подготовить коллекцию. {e}")
         return
     
-    # --- НОВЫЙ БЛОК: Определение измененных файлов ---
+    # Определение измененных файлов
     print("\n--- Проверка состояния документов ---")
     state = load_state()
     files_to_process = []
@@ -140,7 +140,7 @@ def main():
         
     print(f"\n--- Обнаружено {len(files_to_process)} новых/измененных файлов для обработки ---")
 
-    # --- Загружаем модель только если есть что обрабатывать ---
+    # Загружаем модель только если есть что обрабатывать
     print(f"\nЗагрузка локальной embedding-модели...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     embedding_model = SentenceTransformer(config.EMBEDDING_MODEL_PATH, device=device)
@@ -153,7 +153,7 @@ def main():
         filename = os.path.basename(file_path)
         print(f"\n-> Обработка: {filename}")
         
-        # --- НОВЫЙ ШАГ: Удаление старых данных для этого файла из Qdrant ---
+        # Удаление старых данных для этого файла из Qdrant
         print(f"  - Удаление старых записей для '{filename}' из Qdrant...")
         try:
             qdrant_client.delete(
@@ -168,7 +168,7 @@ def main():
         except Exception as e:
             print(f"  - ⚠️ Ошибка при удалении старых записей (возможно, их и не было): {e}")
 
-        # --- Стандартная обработка файла ---
+        # Стандартная обработка файла
         document_text = None
         if filename.lower().endswith(".docx"):
             document_text = extract_text_from_docx(file_path)
@@ -196,7 +196,7 @@ def main():
             new_state[file_path] = os.path.getmtime(file_path)
             print(f"  - ✅ Файл обработан, создано {len(embeddings)} векторов.")
 
-    # --- Загрузка всех НОВЫХ векторов в Qdrant батчами ---
+    # Загрузка всех НОВЫХ векторов в Qdrant батчами
     if not all_points:
         print("\n⚠️ Не удалось создать векторы из измененных файлов.")
         return
@@ -211,7 +211,7 @@ def main():
         
         print("\n✅ Новые векторы успешно загружены!")
         
-        # --- Сохраняем новое состояние ТОЛЬКО после успешной загрузки ---
+        # Сохраняем новое состояние ТОЛЬКО после успешной загрузки
         save_state(new_state)
         print(f"✅ Файл состояния '{STATE_FILE}' обновлен.")
 
