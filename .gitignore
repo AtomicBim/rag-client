@@ -1,4 +1,18 @@
+# Папки с локальными данными (не версионируются)
 local_model/
 rag-source/
-rag-atom-token.txt
+
+# Виртуальное окружение Python
 venv/
+__pycache__/
+
+# Файлы кэша и состояния
+*.pkl
+indexing_state.json
+
+# Локальные токены и секреты
+rag-atom-token.txt
+
+# Системные файлы ОС
+.DS_Store
+Thumbs.db
