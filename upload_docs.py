@@ -3,7 +3,6 @@ import uuid
 import torch
 import traceback
 import config
-import pypandoc
 
 from unstructured.partition.docx import partition_docx
 from qdrant_client import QdrantClient, models

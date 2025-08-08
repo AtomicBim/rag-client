@@ -6,4 +6,3 @@ torchvision
 torchaudio
 sentence-transformers
 requests
-pypandoc
