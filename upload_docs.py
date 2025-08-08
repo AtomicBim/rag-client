@@ -76,44 +76,6 @@ def extract_text_from_pdf(file_path):
         return None
 
 
-    """
-    Конвертирует .doc в .docx с помощью Microsoft Word.
-    Возвращает путь к новому .docx файлу.
-    """
-    if sys.platform != "win32":
-        print("  - ⚠️ Пропуск .doc файла: автоматическая конвертация поддерживается только на Windows.")
-        return None
-        
-    word = None
-    try:
-        # Получаем абсолютные пути, чтобы Word не запутался
-        abs_path_doc = os.path.abspath(file_path)
-        abs_path_docx = abs_path_doc + "x"
-        
-        print(f"  - ⚙️ Конвертация .doc с помощью MS Word: {os.path.basename(file_path)}")
-        
-        # Запускаем приложение Word в фоне
-        word = win32.Dispatch("Word.Application")
-        word.visible = False
-        
-        # Открываем .doc файл
-        doc = word.Documents.Open(abs_path_doc)
-        
-        # Сохраняем в формате .docx (wdFormatXMLDocument = 12)
-        doc.SaveAs(abs_path_docx, FileFormat=12)
-        doc.Close()
-        
-        return abs_path_docx
-        
-    except Exception as e:
-        print(f"  - ❌ Ошибка конвертации файла {os.path.basename(file_path)} через Word: {e}")
-        return None
-    finally:
-        # Убеждаемся, что приложение Word закрыто, даже если была ошибка
-        if word:
-            word.Quit()
-
-
 def get_text_chunks(text):
     """Разбивает текст на чанки."""
     text_splitter = RecursiveCharacterTextSplitter(
@@ -221,18 +183,32 @@ def main():
         print("\n⚠️ Документы для индексации не найдены. Проверьте исходную папку.")
         return
 
-    # ... (код загрузки в Qdrant без изменений) ...
+    # --- ИЗМЕНЕНО: Загрузка данных в Qdrant батчами ---
     print(f"\n--- Загрузка данных в Qdrant ---")
     print(f"Подготовлено {len(all_points)} векторов из {processed_files_count} файлов.")
+
+    # Устанавливаем размер батча (можно регулировать, 512 - хорошее начало)
+    BATCH_SIZE = 512 
+    num_batches = (len(all_points) + BATCH_SIZE - 1) // BATCH_SIZE
+
     try:
-        qdrant_client.upsert(
-            collection_name=config.COLLECTION_NAME,
-            points=all_points,
-            wait=True
-        )
-        print("✅ Все векторы успешно загружены!")
+        for i in range(num_batches):
+            start_idx = i * BATCH_SIZE
+            end_idx = min((i + 1) * BATCH_SIZE, len(all_points))
+            batch_points = all_points[start_idx:end_idx]
+            
+            print(f"  - Загрузка батча {i+1}/{num_batches} ({len(batch_points)} векторов)...")
+            
+            qdrant_client.upsert(
+                collection_name=config.COLLECTION_NAME,
+                points=batch_points,
+                wait=True
+            )
+        print("\n✅ Все векторы успешно загружены!")
+
     except Exception as e:
         print(f"❌ ОШИБКА во время загрузки векторов в Qdrant: {e}")
+
 
     # --- Шаг 5: Завершение ---
     print("\n✅ Локальная индексация полностью завершена!")
