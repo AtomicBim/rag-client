@@ -130,24 +130,24 @@ def main():
     # ... (код инициализации без изменений) ...
     print("--- Инициализация клиентов ---")
     try:
-        qdrant_client = QdrantClient(host=QDRANT_HOST, port=6333)
+        qdrant_client = QdrantClient(host=config.QDRANT_HOST, port=6333)
         qdrant_client.get_collections()
-        print(f"✅ Подключение к Qdrant: {QDRANT_HOST}:6333")
+        print(f"✅ Подключение к Qdrant: {config.QDRANT_HOST}:6333")
     except Exception as e:
         print(f"❌ ОШИБКА: Не удалось подключиться к Qdrant. {e}")
         return
 
     print(f"Загрузка локальной embedding-модели...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    embedding_model = SentenceTransformer(LOCAL_EMBEDDING_MODEL, device=device)
+    embedding_model = SentenceTransformer(config.EMBEDDING_MODEL_PATH, device=device)
     print(f"✅ Модель загружена на: {device.upper()}")
 
     # --- Шаг 2: Подготовка коллекции в Qdrant ---
     try:
-        print(f"\n--- Пересоздание коллекции '{COLLECTION_NAME}' ---")
+        print(f"\n--- Пересоздание коллекции '{config.COLLECTION_NAME}' ---")
         qdrant_client.recreate_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=models.VectorParams(size=EMBEDDING_DIMENSION, distance=models.Distance.COSINE),
+            collection_name=config.COLLECTION_NAME,
+            vectors_config=models.VectorParams(size=config.EMBEDDING_DIMENSION, distance=models.Distance.COSINE),
         )
         print("✅ Коллекция успешно пересоздана.")
     except Exception as e:
@@ -155,7 +155,7 @@ def main():
         return
 
     print("\n--- Индексация документов ---")
-    absolute_docs_path = os.path.abspath(DOCS_ROOT_PATH)
+    absolute_docs_path = os.path.abspath(config.DOCS_ROOT_PATH)
     if not os.path.isdir(absolute_docs_path):
         print(f"❌ ОШИБКА: Папка не найдена по пути '{absolute_docs_path}'.")
         return
@@ -226,7 +226,7 @@ def main():
     print(f"Подготовлено {len(all_points)} векторов из {processed_files_count} файлов.")
     try:
         qdrant_client.upsert(
-            collection_name=COLLECTION_NAME,
+            collection_name=config.COLLECTION_NAME,
             points=all_points,
             wait=True
         )
