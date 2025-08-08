@@ -3,6 +3,8 @@ import uuid
 import torch
 import traceback
 import config
+import win32com.client as win32
+import sys
 
 from unstructured.partition.docx import partition_docx
 from qdrant_client import QdrantClient, models
@@ -19,28 +21,44 @@ def extract_text_from_docx(file_path):
         return None
 
 
-def extract_text_from_doc(file_path):
+def convert_doc_to_docx(file_path):
     """
-    Обрабатывает .doc файлы, конвертируя их в .docx с помощью pypandoc.
+    Конвертирует .doc в .docx с помощью Microsoft Word.
+    Возвращает путь к новому .docx файлу.
     """
-    print(f"  - ⚙️ Конвертация старого формата .doc: {os.path.basename(file_path)}")
-    try:
-        # pypandoc конвертирует .doc -> .docx и возвращает результат
-        # Мы не сохраняем его на диск, а сразу передаем в partition_docx
-        output_path = file_path + ".docx" # Временный путь
-        pypandoc.convert_file(file_path, 'docx', outputfile=output_path)
-        
-        # Теперь обрабатываем как обычный .docx
-        text = extract_text_from_docx(output_path)
-        
-        # Удаляем временный файл
-        os.remove(output_path)
-        
-        return text
-    except Exception as e:
-        print(f"  - ❌ Ошибка конвертации или извлечения из .doc файла {os.path.basename(file_path)}: {e}")
+    if sys.platform != "win32":
+        print("  - ⚠️ Пропуск .doc файла: автоматическая конвертация поддерживается только на Windows.")
         return None
-    
+        
+    word = None
+    try:
+        # Получаем абсолютные пути, чтобы Word не запутался
+        abs_path_doc = os.path.abspath(file_path)
+        abs_path_docx = abs_path_doc + "x"
+        
+        print(f"  - ⚙️ Конвертация .doc с помощью MS Word: {os.path.basename(file_path)}")
+        
+        # Запускаем приложение Word в фоне
+        word = win32.Dispatch("Word.Application")
+        word.visible = False
+        
+        # Открываем .doc файл
+        doc = word.Documents.Open(abs_path_doc)
+        
+        # Сохраняем в формате .docx (wdFormatXMLDocument = 12)
+        doc.SaveAs(abs_path_docx, FileFormat=12)
+        doc.Close()
+        
+        return abs_path_docx
+        
+    except Exception as e:
+        print(f"  - ❌ Ошибка конвертации файла {os.path.basename(file_path)} через Word: {e}")
+        return None
+    finally:
+        # Убеждаемся, что приложение Word закрыто, даже если была ошибка
+        if word:
+            word.Quit()
+
 
 def get_text_chunks(text):
     """Разбивает текст на чанки."""
@@ -55,7 +73,7 @@ def get_text_chunks(text):
 
 def main():
     """Основная функция для индексации документов."""
-    # --- Шаг 1: Инициализация ---
+    # ... (код инициализации клиентов остается без изменений) ...
     print("--- Инициализация клиентов ---")
     try:
         qdrant_client = QdrantClient(host=config.QDRANT_HOST, port=6333)
@@ -81,8 +99,7 @@ def main():
     except Exception as e:
         print(f"❌ ОШИБКА: Не удалось создать коллекцию. {e}")
         return
-
-    # --- Шаг 3: Рекурсивный поиск и обработка документов ---
+        
     print("\n--- Индексация документов ---")
     absolute_docs_path = os.path.abspath(config.DOCS_ROOT_PATH)
     if not os.path.isdir(absolute_docs_path):
@@ -94,8 +111,11 @@ def main():
 
     for root, dirs, files in os.walk(absolute_docs_path):
         for filename in files:
-            # --- ИЗМЕНЕНИЕ: Упрощенная проверка расширения ---
             if not filename.lower().endswith((".doc", ".docx")):
+                continue
+            
+            # Игнорируем временные файлы Word
+            if filename.startswith('~'):
                 continue
 
             file_path = os.path.join(root, filename)
@@ -103,11 +123,22 @@ def main():
             print(f"-> Обработка: {relative_path}")
 
             document_text = None
+            
+            # --- ИЗМЕНЕНИЕ: Новая логика обработки ---
             if filename.lower().endswith(".docx"):
                 document_text = extract_text_from_docx(file_path)
             elif filename.lower().endswith(".doc"):
-                # --- ИЗМЕНЕНИЕ: Вызываем новую функцию для .doc ---
-                document_text = extract_text_from_doc(file_path)
+                # 1. Конвертируем .doc в .docx
+                docx_path = convert_doc_to_docx(file_path)
+                
+                if docx_path:
+                    # 2. Извлекаем текст из нового .docx
+                    document_text = extract_text_from_docx(docx_path)
+                    # 3. Удаляем временный .docx файл
+                    try:
+                        os.remove(docx_path)
+                    except Exception as e:
+                        print(f"  - ⚠️ Не удалось удалить временный файл {docx_path}: {e}")
 
             if not document_text:
                 continue
@@ -131,6 +162,7 @@ def main():
             
             processed_files_count += 1
 
+    # ... (код загрузки в Qdrant и завершения остается без изменений) ...
     if not all_points:
         print("\n⚠️ Документы для индексации не найдены. Проверьте исходную папку.")
         return
