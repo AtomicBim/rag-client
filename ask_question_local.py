@@ -60,7 +60,7 @@ if __name__ == "__main__":
     try:
         # Загружаем все необходимое
         print("Загрузка модели эмбеддингов (SentenceTransformer)...")
-        s_transformer = SentenceTransformer(config.LOCAL_EMBEDDING_MODEL, device='cpu')
+        s_transformer = SentenceTransformer(config.EMBEDDING_MODEL_PATH, device='cpu')
         
         print(f"Подключение к Qdrant по адресу {config.QDRANT_HOST}...")
         q_client = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
