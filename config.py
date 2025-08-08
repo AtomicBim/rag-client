@@ -5,3 +5,4 @@ EMBEDDING_MODEL_PATH = "C:/Users/r.grigoriev/Desktop/rag-client/local_model/ru-e
 EMBEDDING_DIMENSION = 768
 OPENAI_API_ENDPOINT = "http://192.168.45.79:8000/generate_answer"
 DOCS_ROOT_PATH = "./rag-source"
+SEARCH_LIMIT = 100
