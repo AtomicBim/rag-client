@@ -1,17 +1,8 @@
 import sys
 import requests
+import config
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
-
-# --- КОНФИГУРАЦИЯ ---
-QDRANT_HOST = "192.168.42.188"
-COLLECTION_NAME = "internal_regulations_v2"
-LOCAL_EMBEDDING_MODEL = "C:/Users/r.grigoriev/Desktop/rag-client/local_model/all-mpnet-base-v2"
-SEARCH_LIMIT = 5
-
-# !!! ВАЖНО: Замените на IP-адрес вашей виртуальной машины
-OPENAI_API_ENDPOINT = "http://192.168.45.79:8000/generate_answer"
-
 
 class LocalRAGClient:
     """
@@ -36,7 +27,7 @@ class LocalRAGClient:
         
         # Поиск контекста в Qdrant
         search_results = self.qdrant_client.search(
-            collection_name=COLLECTION_NAME,
+            collection_name=config.COLLECTION_NAME,
             query_vector=question_embedding,
             limit=SEARCH_LIMIT,
             with_payload=True
@@ -53,7 +44,7 @@ class LocalRAGClient:
         print("...Отправка запроса на сервер OpenAI на ВМ...")
         try:
             payload = {"question": question, "context": context}
-            response = requests.post(OPENAI_API_ENDPOINT, json=payload, timeout=120)
+            response = requests.post(config.OPENAI_API_ENDPOINT, json=payload, timeout=120)
             response.raise_for_status()  # Проверка на HTTP ошибки (4xx, 5xx)
             
             answer = response.json().get("answer", "Сервер вернул пустой ответ.")
@@ -69,10 +60,10 @@ if __name__ == "__main__":
     try:
         # Загружаем все необходимое
         print("Загрузка модели эмбеддингов (SentenceTransformer)...")
-        s_transformer = SentenceTransformer(LOCAL_EMBEDDING_MODEL, device='cpu')
+        s_transformer = SentenceTransformer(config.LOCAL_EMBEDDING_MODEL, device='cpu')
         
-        print(f"Подключение к Qdrant по адресу {QDRANT_HOST}...")
-        q_client = QdrantClient(host=QDRANT_HOST, port=6333)
+        print(f"Подключение к Qdrant по адресу {config.QDRANT_HOST}...")
+        q_client = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
 
         # Создаем клиент, передавая ему два аргумента, определенных в init
         local_client = LocalRAGClient(embedding_model=s_transformer, qdrant_client=q_client)

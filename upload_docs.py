@@ -2,65 +2,81 @@ import os
 import uuid
 import torch
 import traceback
-from unstructured.partition.docx import partition_docx
+import config
+import pypandoc
 
+from unstructured.partition.docx import partition_docx
 from qdrant_client import QdrantClient, models
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 
-# --- КОНФИГУРАЦИЯ ---
-QDRANT_HOST = "192.168.42.188"
-DOCS_ROOT_PATH = "./rag-source"
-COLLECTION_NAME = "internal_regulations_v2"
-LOCAL_EMBEDDING_MODEL = "C:/Users/r.grigoriev/Desktop/rag-client/local_model/all-mpnet-base-v2"
-EMBEDDING_DIMENSION = 768
-
 def extract_text_from_docx(file_path):
     """Извлекает элементы из .docx файла с помощью unstructured."""
     try:
-        elements = partition_docx(filename=file_path)
-        # Соединяем текстовое представление всех элементов в один документ
+        elements = partition_docx(filename=file_path, infer_table_structure=True)
         return "\n\n".join([str(el) for el in elements])
     except Exception as e:
         print(f"  - ❌ Ошибка извлечения текста из {os.path.basename(file_path)}: {e}")
         return None
 
+
 def extract_text_from_doc(file_path):
     """
-    Заглушка для обработки .doc файлов.
-    Для полноценной работы рекомендуется использовать утилиты вроде 'antiword' или 'libreoffice'.
+    Обрабатывает .doc файлы, конвертируя их в .docx с помощью pypandoc.
     """
-    print(f"  - ⚠️ Пропуск старого формата .doc: {os.path.basename(file_path)}")
-    return None
+    print(f"  - ⚙️ Конвертация старого формата .doc: {os.path.basename(file_path)}")
+    try:
+        # pypandoc конвертирует .doc -> .docx и возвращает результат
+        # Мы не сохраняем его на диск, а сразу передаем в partition_docx
+        output_path = file_path + ".docx" # Временный путь
+        pypandoc.convert_file(file_path, 'docx', outputfile=output_path)
+        
+        # Теперь обрабатываем как обычный .docx
+        text = extract_text_from_docx(output_path)
+        
+        # Удаляем временный файл
+        os.remove(output_path)
+        
+        return text
+    except Exception as e:
+        print(f"  - ❌ Ошибка конвертации или извлечения из .doc файла {os.path.basename(file_path)}: {e}")
+        return None
+    
 
 def get_text_chunks(text):
     """Разбивает текст на чанки."""
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000, 
+        chunk_overlap=200,
+        # Используем разделители, которые часто встречаются в документах
+        separators=["\n\n", "\n", ".", " ", ""]
+    )
     return text_splitter.split_text(text)
+
 
 def main():
     """Основная функция для индексации документов."""
     # --- Шаг 1: Инициализация ---
     print("--- Инициализация клиентов ---")
     try:
-        qdrant_client = QdrantClient(host=QDRANT_HOST, port=6333)
+        qdrant_client = QdrantClient(host=config.QDRANT_HOST, port=6333)
         qdrant_client.get_collections()
-        print(f"✅ Подключение к Qdrant: {QDRANT_HOST}:6333")
+        print(f"✅ Подключение к Qdrant: {config.QDRANT_HOST}:6333")
     except Exception as e:
         print(f"❌ ОШИБКА: Не удалось подключиться к Qdrant. {e}")
         return
 
     print(f"Загрузка локальной embedding-модели...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    embedding_model = SentenceTransformer(LOCAL_EMBEDDING_MODEL, device=device)
+    embedding_model = SentenceTransformer(config.EMBEDDING_MODEL_PATH, device=device)
     print(f"✅ Модель загружена на: {device.upper()}")
 
     # --- Шаг 2: Подготовка коллекции в Qdrant ---
     try:
-        print(f"\n--- Пересоздание коллекции '{COLLECTION_NAME}' ---")
+        print(f"\n--- Пересоздание коллекции '{config.COLLECTION_NAME}' ---")
         qdrant_client.recreate_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=models.VectorParams(size=EMBEDDING_DIMENSION, distance=models.Distance.COSINE),
+            collection_name=config.COLLECTION_NAME,
+            vectors_config=models.VectorParams(size=config.EMBEDDING_DIMENSION, distance=models.Distance.COSINE),
         )
         print("✅ Коллекция успешно пересоздана.")
     except Exception as e:
@@ -69,7 +85,7 @@ def main():
 
     # --- Шаг 3: Рекурсивный поиск и обработка документов ---
     print("\n--- Индексация документов ---")
-    absolute_docs_path = os.path.abspath(DOCS_ROOT_PATH)
+    absolute_docs_path = os.path.abspath(config.DOCS_ROOT_PATH)
     if not os.path.isdir(absolute_docs_path):
         print(f"❌ ОШИБКА: Папка не найдена по пути '{absolute_docs_path}'.")
         return
@@ -77,9 +93,9 @@ def main():
     all_points = []
     processed_files_count = 0
 
-    # Рекурсивный обход всех папок и файлов
     for root, dirs, files in os.walk(absolute_docs_path):
         for filename in files:
+            # --- ИЗМЕНЕНИЕ: Упрощенная проверка расширения ---
             if not filename.lower().endswith((".doc", ".docx")):
                 continue
 
@@ -91,6 +107,7 @@ def main():
             if filename.lower().endswith(".docx"):
                 document_text = extract_text_from_docx(file_path)
             elif filename.lower().endswith(".doc"):
+                # --- ИЗМЕНЕНИЕ: Вызываем новую функцию для .doc ---
                 document_text = extract_text_from_doc(file_path)
 
             if not document_text:
@@ -103,7 +120,6 @@ def main():
 
             embeddings = embedding_model.encode(chunks, show_progress_bar=False)
             
-            # Получаем имя папки, в которой лежит файл, для категории
             category = os.path.basename(os.path.dirname(file_path))
 
             for chunk, embedding in zip(chunks, embeddings):
@@ -125,7 +141,7 @@ def main():
     print(f"Подготовлено {len(all_points)} векторов из {processed_files_count} файлов.")
     try:
         qdrant_client.upsert(
-            collection_name=COLLECTION_NAME,
+            collection_name=config.COLLECTION_NAME,
             points=all_points,
             wait=True
         )
