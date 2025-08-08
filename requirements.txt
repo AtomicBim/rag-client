@@ -6,3 +6,5 @@ torchvision
 torchaudio
 sentence-transformers
 requests
+pywin32
+pypdf
