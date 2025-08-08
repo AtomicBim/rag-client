@@ -29,7 +29,7 @@ class LocalRAGClient:
         search_results = self.qdrant_client.search(
             collection_name=config.COLLECTION_NAME,
             query_vector=question_embedding,
-            limit=SEARCH_LIMIT,
+            limit=config.SEARCH_LIMIT,
             with_payload=True
         )
 
