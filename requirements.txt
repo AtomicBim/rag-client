@@ -1,0 +1,8 @@
+qdrant-client
+python-docx
+langchain
+torch
+torchvision
+torchaudio
+sentence-transformers
+requests
