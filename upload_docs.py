@@ -28,9 +28,18 @@ except ImportError as e:
     logging.warning(f"Sentence Transformers не доступен: {e}")
 
 from unstructured.partition.docx import partition_docx
-from qdrant_client import QdrantClient, models
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
+from qdrant_client.http.models.models import PointStruct
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
+
+# Совместимость типов для различных версий qdrant_client
+try:
+    from typing import Union, Sequence
+    QdrantPoints = Union[List[PointStruct], Sequence[PointStruct]]
+except ImportError:
+    QdrantPoints = List[PointStruct]
 
 # Файл для хранения состояния индексации
 STATE_FILE = "indexing_state.json"
@@ -126,7 +135,7 @@ class DocumentIndexer:
         except Exception as e:
             logger.warning(f"  - ⚠️ Ошибка при удалении старых записей: {e}")
     
-    def create_embeddings_batch(self, chunks: List[str], filename: str, category: str) -> List[models.PointStruct]:
+    def create_embeddings_batch(self, chunks: List[str], filename: str, category: str) -> List[PointStruct]:
         """Создание батча векторов для загрузки в Qdrant."""
         if not self.embedding_model:
             raise ValueError("Модель эмбеддингов не инициализирована")
@@ -135,7 +144,7 @@ class DocumentIndexer:
         points = []
         
         for chunk, embedding in zip(chunks, embeddings):
-            point = models.PointStruct(
+            point = PointStruct(
                 id=str(uuid.uuid4()),
                 vector=embedding.tolist(),
                 payload={"text": chunk, "source_file": filename, "category": category}
@@ -144,7 +153,7 @@ class DocumentIndexer:
             
         return points
     
-    def upload_points_to_qdrant(self, points: List[models.PointStruct]) -> bool:
+    def upload_points_to_qdrant(self, points: List[PointStruct]) -> bool:
         """Загрузка точек в Qdrant батчами."""
         if not self.qdrant_client:
             logger.error("❌ Клиент Qdrant не инициализирован")
@@ -164,13 +173,14 @@ class DocumentIndexer:
                 
                 # Проверяем структуру точек в батче
                 for point in batch_points:
-                    if not isinstance(point, models.PointStruct):
+                    if not isinstance(point, PointStruct):
                         logger.error(f"❌ Некорректный тип точки: {type(point)}")
                         return False
                 
+                # Приведение к правильному типу для Qdrant API
                 self.qdrant_client.upsert(
                     collection_name=config.COLLECTION_NAME, 
-                    points=batch_points, 
+                    points=batch_points,  # type: ignore[arg-type]
                     wait=True
                 )
                 
