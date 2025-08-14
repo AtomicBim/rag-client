@@ -1,6 +1,7 @@
 import uvicorn
 import torch
 import logging
+import os
 from typing import List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status
@@ -16,13 +17,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Конфигурация
-MODEL_PATH = "C:/Users/r.grigoriev/Desktop/rag-client/local_model/ru-en-RoSBERTa"
+MODEL_PATH = os.getenv("MODEL_PATH", "./local_model/ru-en-RoSBERTa")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 HOST = "0.0.0.0"
 PORT = 8001
-
-# Глобальная переменная для модели
-embedding_model = None
 
 class EmbeddingService:
     """Singleton класс для управления моделью эмбеддингов."""
@@ -98,16 +96,17 @@ app = FastAPI(
 )
 
 # Настройка CORS
+allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # В продакшне следует указать конкретные домены
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
 class TextRequest(BaseModel):
-    """Modele запроса для создания эмбеддинга."""
+    """Модель запроса для создания эмбеддинга."""
     text: str = Field(
         ...,
         description="Текст для векторизации",
@@ -151,11 +150,6 @@ async def create_embedding(request: TextRequest):
     Принимает текст и возвращает его векторное представление.
     Поддерживает тексты длиной до 10,000 символов.
     """
-    if not request.text.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Текст не может быть пустым"
-        )
     
     try:
         logger.info(f"Создание эмбеддинга для текста длиной {len(request.text)} символов")
