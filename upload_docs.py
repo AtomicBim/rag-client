@@ -1,6 +1,5 @@
 import os
 import uuid
-import torch
 import traceback
 import config
 import win32com.client as win32
@@ -12,15 +11,29 @@ from pathlib import Path
 from dataclasses import dataclass
 import logging
 
+# Импорты с обработкой ошибок
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError as e:
+    TORCH_AVAILABLE = False
+    logging.warning(f"Torch не доступен: {e}")
+    logging.warning("Для работы с моделями требуется установка Microsoft Visual C++ Redistributable")
+
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError as e:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    logging.warning(f"Sentence Transformers не доступен: {e}")
+
 from unstructured.partition.docx import partition_docx
 from qdrant_client import QdrantClient, models
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from sentence_transformers import SentenceTransformer
 from pypdf import PdfReader
 
 # Файл для хранения состояния индексации
 STATE_FILE = "indexing_state.json"
-BATCH_SIZE = config.BATCH_SIZE
 SUPPORTED_EXTENSIONS = {".docx", ".pdf"}
 
 # Настройка логирования
@@ -74,6 +87,14 @@ class DocumentIndexer:
     
     def initialize_embedding_model(self) -> bool:
         """Инициализация модели эмбеддингов."""
+        if not SENTENCE_TRANSFORMERS_AVAILABLE:
+            logger.error("❌ Sentence Transformers не доступен. Проверьте установку зависимостей.")
+            return False
+            
+        if not TORCH_AVAILABLE:
+            logger.error("❌ PyTorch не доступен. Возможно требуется Microsoft Visual C++ Redistributable.")
+            return False
+            
         try:
             device = "cuda" if torch.cuda.is_available() else "cpu"
             self.embedding_model = SentenceTransformer(config.EMBEDDING_MODEL_PATH, device=device)
@@ -81,6 +102,10 @@ class DocumentIndexer:
             return True
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки модели: {e}")
+            logger.error("Возможные причины:")
+            logger.error("1. Отсутствует Microsoft Visual C++ Redistributable")
+            logger.error("2. Неверный путь к модели")
+            logger.error("3. Недостаточно памяти")
             return False
     
     def delete_old_document_records(self, filename: str) -> None:
@@ -122,8 +147,9 @@ class DocumentIndexer:
     def upload_points_to_qdrant(self, points: List[models.PointStruct]) -> bool:
         """Загрузка точек в Qdrant батчами."""
         try:
-            for i in range(0, len(points), BATCH_SIZE):
-                batch_points = points[i:i+BATCH_SIZE]
+            batch_size = config.BATCH_SIZE
+            for i in range(0, len(points), batch_size):
+                batch_points = points[i:i+batch_size]
                 logger.info(f"  - Загрузка батча ({len(batch_points)} векторов)...")
                 self.qdrant_client.upsert(
                     collection_name=config.COLLECTION_NAME, 
