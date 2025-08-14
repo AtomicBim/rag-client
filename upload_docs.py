@@ -119,7 +119,13 @@ class DocumentIndexer:
     
     def delete_old_document_records(self, filename: str) -> None:
         """Удаление старых записей документа из Qdrant."""
+        if not self.qdrant_client:
+            logger.error("❌ Клиент Qdrant не инициализирован")
+            return
+            
         try:
+            # После проверки выше, self.qdrant_client гарантированно не None
+            assert self.qdrant_client is not None
             self.qdrant_client.delete(
                 collection_name=config.COLLECTION_NAME,
                 points_selector=models.FilterSelector(
