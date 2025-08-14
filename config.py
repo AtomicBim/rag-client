@@ -2,7 +2,6 @@
 Конфигурационные параметры для RAG-системы.
 """
 import os
-from typing import Optional
 
 # === Параметры Qdrant ===
 QDRANT_HOST: str = os.getenv("QDRANT_HOST", "192.168.42.188")
@@ -12,7 +11,7 @@ COLLECTION_NAME: str = os.getenv("COLLECTION_NAME", "internal_regulations_v2")
 # === Параметры модели эмбеддингов ===
 EMBEDDING_MODEL_PATH: str = os.getenv(
     "EMBEDDING_MODEL_PATH", 
-    "C:/Users/r.grigoriev/Desktop/rag-client/local_model/sbert_large_mt_nlu_ru"
+    "./local_model/sbert_large_mt_nlu_ru"
 )
 EMBEDDING_DIMENSION: int = int(os.getenv("EMBEDDING_DIMENSION", "1024"))
 

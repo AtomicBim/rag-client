@@ -1,12 +1,9 @@
 import os
 import uuid
-import traceback
 import config
-import win32com.client as win32
 import sys
 import json
-from datetime import datetime
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from pathlib import Path
 from dataclasses import dataclass
 import logging
@@ -33,13 +30,6 @@ from qdrant_client.http import models
 from qdrant_client.http.models.models import PointStruct
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
-
-# Совместимость типов для различных версий qdrant_client
-try:
-    from typing import Union, Sequence
-    QdrantPoints = Union[List[PointStruct], Sequence[PointStruct]]
-except ImportError:
-    QdrantPoints = List[PointStruct]
 
 # Файл для хранения состояния индексации
 STATE_FILE = "indexing_state.json"
@@ -124,8 +114,6 @@ class DocumentIndexer:
             return
             
         try:
-            # После проверки выше, self.qdrant_client гарантированно не None
-            assert self.qdrant_client is not None
             self.qdrant_client.delete(
                 collection_name=config.COLLECTION_NAME,
                 points_selector=models.FilterSelector(
@@ -183,10 +171,9 @@ class DocumentIndexer:
                         logger.error(f"❌ Некорректный тип точки: {type(point)}")
                         return False
                 
-                # Приведение к правильному типу для Qdrant API
                 self.qdrant_client.upsert(
                     collection_name=config.COLLECTION_NAME, 
-                    points=batch_points,  # type: ignore[arg-type]
+                    points=batch_points,
                     wait=True
                 )
                 
@@ -287,6 +274,12 @@ def convert_doc_to_docx(file_path: str) -> Optional[str]:
     """Конвертирует .doc в .docx."""
     if sys.platform != "win32":
         logger.warning("Конверсия .doc доступна только на Windows")
+        return None
+    
+    try:
+        import win32com.client as win32
+    except ImportError:
+        logger.error("win32com.client не доступен. Установите pywin32.")
         return None
     
     word = None
@@ -432,4 +425,5 @@ if __name__ == "__main__":
         logger.info("⚠️ Программа прервана пользователем.")
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {e}")
+        import traceback
         traceback.print_exc()
