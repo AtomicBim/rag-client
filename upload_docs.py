@@ -146,19 +146,40 @@ class DocumentIndexer:
     
     def upload_points_to_qdrant(self, points: List[models.PointStruct]) -> bool:
         """Загрузка точек в Qdrant батчами."""
+        if not self.qdrant_client:
+            logger.error("❌ Клиент Qdrant не инициализирован")
+            return False
+            
+        if not points:
+            logger.warning("⚠️ Список точек пуст, нечего загружать")
+            return True
+            
         try:
             batch_size = config.BATCH_SIZE
+            logger.info(f"Начинаем загрузку {len(points)} точек батчами по {batch_size}")
+            
             for i in range(0, len(points), batch_size):
                 batch_points = points[i:i+batch_size]
                 logger.info(f"  - Загрузка батча ({len(batch_points)} векторов)...")
+                
+                # Проверяем структуру точек в батче
+                for point in batch_points:
+                    if not isinstance(point, models.PointStruct):
+                        logger.error(f"❌ Некорректный тип точки: {type(point)}")
+                        return False
+                
                 self.qdrant_client.upsert(
                     collection_name=config.COLLECTION_NAME, 
                     points=batch_points, 
                     wait=True
                 )
+                
+            logger.info(f"✅ Успешно загружено {len(points)} точек в Qdrant")
             return True
+            
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки векторов в Qdrant: {e}")
+            logger.error(f"Тип ошибки: {type(e).__name__}")
             return False
     
     def process_document(self, file_path: str) -> DocumentProcessingResult:
