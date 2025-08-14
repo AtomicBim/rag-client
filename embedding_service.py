@@ -1,43 +1,184 @@
 import uvicorn
 import torch
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+import logging
+from typing import List
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
-# --- Конфигурация ---
-# Путь к вашей локальной модели
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Конфигурация
 MODEL_PATH = "C:/Users/r.grigoriev/Desktop/rag-client/local_model/ru-en-RoSBERTa"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+HOST = "0.0.0.0"
+PORT = 8001
 
-print(f"Загрузка embedding-модели на устройство: {DEVICE.upper()}")
-try:
-    embedding_model = SentenceTransformer(MODEL_PATH, device=DEVICE)
-    print("✅ Модель успешно загружена.")
-except Exception as e:
-    print(f"❌ Критическая ошибка при загрузке модели: {e}")
-    exit()
+# Глобальная переменная для модели
+embedding_model = None
 
-# --- FastAPI Приложение ---
-app = FastAPI(title="Embedding Generation Service")
+class EmbeddingService:
+    """Singleton класс для управления моделью эмбеддингов."""
+    
+    _instance = None
+    _model = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def initialize_model(self) -> bool:
+        """Инициализация модели эмбеддингов."""
+        if self._model is not None:
+            return True
+            
+        try:
+            logger.info(f"Загрузка embedding-модели на устройство: {DEVICE.upper()}")
+            self._model = SentenceTransformer(MODEL_PATH, device=DEVICE)
+            logger.info("✅ Модель успешно загружена")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Критическая ошибка при загрузке модели: {e}")
+            return False
+    
+    def create_embedding(self, text: str) -> List[float]:
+        """Создание векторного представления для текста."""
+        if self._model is None:
+            raise RuntimeError("Модель не инициализирована")
+            
+        try:
+            embedding = self._model.encode(text, show_progress_bar=False)
+            return embedding.tolist()
+        except Exception as e:
+            logger.error(f"Ошибка создания эмбеддинга: {e}")
+            raise
+    
+    def get_model_info(self) -> dict:
+        """Получение информации о модели."""
+        if self._model is None:
+            return {"status": "not_initialized"}
+            
+        return {
+            "status": "initialized",
+            "device": DEVICE,
+            "model_path": MODEL_PATH,
+            "model_name": getattr(self._model, "_model_name", "unknown")
+        }
+
+# Инициализация сервиса
+embedding_service = EmbeddingService()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Управление жизненным циклом приложения."""
+    # Инициализация при запуске
+    if not embedding_service.initialize_model():
+        logger.error("Не удалось инициализировать модель")
+        exit(1)
+    
+    yield
+    
+    # Очистка при завершении
+    logger.info("Завершение работы сервиса")
+
+# FastAPI приложение
+app = FastAPI(
+    title="Embedding Generation Service",
+    description="Сервис для создания векторных представлений текста",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# Настройка CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # В продакшне следует указать конкретные домены
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class TextRequest(BaseModel):
-    text: str
+    """Modele запроса для создания эмбеддинга."""
+    text: str = Field(
+        ...,
+        description="Текст для векторизации",
+        min_length=1,
+        max_length=10000,
+        example="Пример текста для векторизации"
+    )
 
 class EmbeddingResponse(BaseModel):
-    embedding: list[float]
+    """Модель ответа с векторным представлением."""
+    embedding: List[float] = Field(
+        ...,
+        description="Векторное представление текста"
+    )
+    dimension: int = Field(
+        ...,
+        description="Размерность вектора"
+    )
 
-@app.post("/create_embedding", response_model=EmbeddingResponse)
+class HealthResponse(BaseModel):
+    """Модель ответа проверки состояния."""
+    status: str = Field(..., description="Состояние сервиса")
+    model_info: dict = Field(..., description="Информация о модели")
+
+@app.get("/health", response_model=HealthResponse)
+async def health_check():
+    """
+    Проверка состояния сервиса.
+    """
+    model_info = embedding_service.get_model_info()
+    return {
+        "status": "healthy" if model_info["status"] == "initialized" else "unhealthy",
+        "model_info": model_info
+    }
+
+@app.post("/create_embedding", 
+          response_model=EmbeddingResponse,
+          status_code=status.HTTP_200_OK)
 async def create_embedding(request: TextRequest):
     """
-    Принимает текст и возвращает его векторное представление (embedding).
+    Принимает текст и возвращает его векторное представление.
+    Поддерживает тексты длиной до 10,000 символов.
     """
+    if not request.text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Текст не может быть пустым"
+        )
+    
     try:
-        embedding = embedding_model.encode(request.text).tolist()
-        return {"embedding": embedding}
+        logger.info(f"Создание эмбеддинга для текста длиной {len(request.text)} символов")
+        embedding = embedding_service.create_embedding(request.text)
+        
+        return {
+            "embedding": embedding,
+            "dimension": len(embedding)
+        }
+        
     except Exception as e:
-        # Логирование ошибки было бы здесь очень полезно
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Ошибка при создании эмбеддинга: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка обработки запроса: {str(e)}"
+        )
 
 if __name__ == "__main__":
-    # Запускайте на IP, доступном в вашей локальной сети, например 0.0.0.0
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    logger.info(f"Запуск сервиса эмбеддингов на {HOST}:{PORT}")
+    uvicorn.run(
+        app, 
+        host=HOST, 
+        port=PORT,
+        log_level="info",
+        access_log=True
+    )
