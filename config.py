@@ -25,7 +25,7 @@ BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "512"))
 # === Внешние API ===
 OPENAI_API_ENDPOINT: str = os.getenv(
     "OPENAI_API_ENDPOINT", 
-    "http://192.168.45.79:8000/generate_answer"
+    "http://192.168.45.55:8000/generate_answer"
 )
 
 # === Параметры логирования ===
