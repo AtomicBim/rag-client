@@ -1,12 +1,14 @@
 import uvicorn
 import torch
 import config
+import os
 from typing import List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
+from starlette.responses import FileResponse
 
 logger = config.setup_logging(__name__)
 
@@ -156,6 +158,35 @@ async def create_embedding(request: TextRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ошибка обработки запроса: {str(e)}"
         )
+
+# --- НОВЫЙ ЭНДПОИНТ ДЛЯ ОТДАЧИ ФАЙЛОВ ---
+@app.get("/documents/{file_path:path}", response_class=FileResponse)
+async def get_document(file_path: str):
+    """
+    Безопасно отдает файл из директории с исходными документами.
+    file_path может содержать поддиректории.
+    """
+    try:
+        # Формируем полный и безопасный путь к файлу
+        full_path = os.path.abspath(os.path.join(config.DOCS_ROOT_PATH, file_path))
+        
+        # Проверка, что запрашиваемый файл находится внутри разрешенной директории
+        if not full_path.startswith(os.path.abspath(config.DOCS_ROOT_PATH)):
+            logger.warning(f"Попытка доступа за пределы DOCS_ROOT_PATH: {file_path}")
+            raise HTTPException(status_code=403, detail="Доступ запрещен")
+
+        if not os.path.isfile(full_path):
+            logger.error(f"Файл не найден: {full_path}")
+            raise HTTPException(status_code=404, detail="Файл не найден")
+        
+        logger.info(f"Отправка файла: {file_path}")
+        return FileResponse(full_path)
+        
+    except HTTPException as e:
+        raise e # Перебрасываем HTTP исключения
+    except Exception as e:
+        logger.error(f"Ошибка при отдаче файла {file_path}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 if __name__ == "__main__":
     logger.info(f"Запуск сервиса эмбеддингов на {config.EMBEDDING_SERVICE_HOST}:{config.EMBEDDING_SERVICE_PORT}")
