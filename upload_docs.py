@@ -4,6 +4,9 @@ import config
 import json
 import torch
 import sys
+import pytesseract
+import requests
+import io
 from typing import List, Dict, Optional
 from pathlib import Path
 from dataclasses import dataclass
@@ -14,12 +17,44 @@ from qdrant_client.http import models
 from qdrant_client.http.models.models import PointStruct
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
+from pdf2image import convert_from_path
+from docx import Document
+from PIL import Image
 
 # Файл для хранения состояния индексации
 STATE_FILE = "indexing_state.json"
 SUPPORTED_EXTENSIONS = {".docx", ".pdf", ".doc"}
 
 logger = config.setup_logging(__name__)
+
+def get_image_description(image: Image.Image) -> Optional[str]:
+    """Отправляет изображение в API для получения текстового описания."""
+    try:
+        buffered = io.BytesIO()
+        image.save(buffered, format="PNG")
+        files = {"file": ("image.png", buffered.getvalue(), "image/png")}
+        response = requests.post(config.IMAGE_CAPTIONING_ENDPOINT, files=files, timeout=60)
+        response.raise_for_status()
+        return response.json().get("description")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ошибка при обращении к API описания изображений: {e}")
+        return None
+
+def ocr_pdf(file_path: str) -> str:
+    """Распознает текст в PDF с помощью OCR, если прямой метод не дал результата."""
+    try:
+        images = convert_from_path(file_path)
+        ocr_text = ""
+        for i, image in enumerate(images):
+            # Добавляем описание изображения (блок-схемы)
+            description = get_image_description(image)
+            if description:
+                ocr_text += f"\n\n--- Описание блок-схемы/изображения со страницы {i+1} ---\n{description}\n--- Конец описания ---\n\n"
+            ocr_text += pytesseract.image_to_string(image, lang='rus+eng')
+        return ocr_text.strip()
+    except Exception as e:
+        logger.error(f"Ошибка OCR для файла {os.path.basename(file_path)}: {e}")
+        return ""
 
 @dataclass
 class DocumentProcessingResult:
@@ -181,6 +216,10 @@ class DocumentIndexer:
                 document_text = extract_text_from_docx(file_path)
             elif extension == ".pdf":
                 document_text = extract_text_from_pdf(file_path)
+                # Если текста мало, пробуем OCR
+                if not document_text or len(document_text) < 100:
+                    logger.info(f"  - Текста в PDF мало, запускаем OCR для {filename}")
+                    document_text = ocr_pdf(file_path)
             else:
                 return DocumentProcessingResult(
                     success=False, 
@@ -290,15 +329,36 @@ def convert_doc_to_docx(file_path: str) -> Optional[str]:
                 pass  # Игнорируем ошибки при закрытии Word
 
 def extract_text_from_docx(file_path: str) -> Optional[str]:
-    """Извлекает элементы из .docx файла с помощью unstructured."""
+    """Извлекает элементы из .docx файла с помощью unstructured, а также обрабатывает изображения."""
     try:
+        # Сначала извлекаем текст
         elements = partition_docx(filename=file_path, infer_table_structure=True)
         text_content = "\n\n".join([str(el) for el in elements])
+
+        # Теперь извлекаем и описываем изображения
+        doc = Document(file_path)
+        image_descriptions = []
+        for rel in doc.part.rels.values():
+            if "image" in rel.target_ref:
+                image_data = rel.target_part.blob
+                try:
+                    image = Image.open(io.BytesIO(image_data))
+                    description = get_image_description(image)
+                    if description:
+                        image_descriptions.append(description)
+                except Exception as e:
+                    logger.warning(f"Не удалось обработать изображение в {os.path.basename(file_path)}: {e}")
+
+        if image_descriptions:
+            text_content += "\n\n--- Описания изображений/блок-схем в документе ---\n"
+            text_content += "\n---\n".join(image_descriptions)
+            text_content += "\n--- Конец описаний ---\n"
+
+
         return text_content.strip() if text_content else None
     except Exception as e:
         logger.error(f"  - ❌ Ошибка извлечения текста из {os.path.basename(file_path)}: {e}")
         return None
-
 
 def extract_text_from_pdf(file_path: str) -> Optional[str]:
     """Извлекает текст из .pdf файла."""

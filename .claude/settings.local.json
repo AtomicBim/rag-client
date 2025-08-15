@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout:*)",
+      "Bash(git push:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(pip show:*)",
+      "Bash(git add:*)",
+      "Bash(rm:*)",
+      "Bash(git branch:*)",
+      "Bash(git stash:*)"
+    ],
+    "deny": [],
+    "ask": [],
+    "defaultMode": "acceptEdits"
+  }
+}

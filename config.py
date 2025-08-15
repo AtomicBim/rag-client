@@ -22,10 +22,16 @@ CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "1000"))
 CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "200"))
 BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "512"))
 
-# === Внешние API ===
+# === API генерации ответа ===
 OPENAI_API_ENDPOINT: str = os.getenv(
     "OPENAI_API_ENDPOINT", 
     "http://192.168.45.55:8000/generate_answer"
+)
+
+# === API описания изображения ===
+IMAGE_CAPTIONING_ENDPOINT: str = os.getenv(
+    "IMAGE_CAPTIONING_ENDPOINT", 
+    "http://192.168.45.55:8000/describe_image"
 )
 
 # === Параметры логирования ===
@@ -92,7 +98,8 @@ def get_config_summary() -> dict:
             "batch_size": BATCH_SIZE
         },
         "api": {
-            "openai_endpoint": OPENAI_API_ENDPOINT
+            "openai_endpoint": OPENAI_API_ENDPOINT,
+            "image_captioning_endpoint": IMAGE_CAPTIONING_ENDPOINT
         }
     }
 
