@@ -167,8 +167,11 @@ async def get_document(file_path: str):
     file_path может содержать поддиректории.
     """
     try:
-        # Формируем полный и безопасный путь к файлу
-        full_path = os.path.abspath(os.path.join(config.DOCS_ROOT_PATH, file_path))
+       # Отбрасываем лишний путь и оставляем только имя файла
+        secure_filename = os.path.basename(file_path)
+        
+        # Формируем полный и безопасный путь к файлу внутри сервиса
+        full_path = os.path.abspath(os.path.join(config.DOCS_ROOT_PATH, secure_filename))
         
         # Проверка, что запрашиваемый файл находится внутри разрешенной директории
         if not full_path.startswith(os.path.abspath(config.DOCS_ROOT_PATH)):
