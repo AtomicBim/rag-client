@@ -1,29 +1,13 @@
 import os
 import uuid
 import config
-import sys
 import json
+import torch
+import sys
 from typing import List, Dict, Optional
 from pathlib import Path
 from dataclasses import dataclass
-import logging
-
-# Импорты с обработкой ошибок
-try:
-    import torch
-    TORCH_AVAILABLE = True
-except ImportError as e:
-    TORCH_AVAILABLE = False
-    logging.warning(f"Torch не доступен: {e}")
-    logging.warning("Для работы с моделями требуется установка Microsoft Visual C++ Redistributable")
-
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError as e:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-    logging.warning(f"Sentence Transformers не доступен: {e}")
-
+from sentence_transformers import SentenceTransformer
 from unstructured.partition.docx import partition_docx
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -33,14 +17,9 @@ from pypdf import PdfReader
 
 # Файл для хранения состояния индексации
 STATE_FILE = "indexing_state.json"
-SUPPORTED_EXTENSIONS = {".docx", ".pdf"}
+SUPPORTED_EXTENSIONS = {".docx", ".pdf", ".doc"}
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = config.setup_logging(__name__)
 
 @dataclass
 class DocumentProcessingResult:
@@ -86,14 +65,6 @@ class DocumentIndexer:
     
     def initialize_embedding_model(self) -> bool:
         """Инициализация модели эмбеддингов."""
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            logger.error("❌ Sentence Transformers не доступен. Проверьте установку зависимостей.")
-            return False
-            
-        if not TORCH_AVAILABLE:
-            logger.error("❌ PyTorch не доступен. Возможно требуется Microsoft Visual C++ Redistributable.")
-            return False
-            
         try:
             device = "cuda" if torch.cuda.is_available() else "cpu"
             self.embedding_model = SentenceTransformer(config.EMBEDDING_MODEL_PATH, device=device)
@@ -195,7 +166,18 @@ class DocumentIndexer:
         
         # Извлечение текста
         try:
-            if extension == ".docx":
+            if extension == ".doc":
+                # Конвертируем .doc в .docx и удаляем оригинал
+                converted_path = convert_doc_to_docx(file_path)
+                if not converted_path:
+                    return DocumentProcessingResult(
+                        success=False, 
+                        error_message="Не удалось конвертировать .doc файл"
+                    )
+                document_text = extract_text_from_docx(converted_path)
+                # Обновляем filename для корректного отображения в логах
+                filename = os.path.basename(converted_path)
+            elif extension == ".docx":
                 document_text = extract_text_from_docx(file_path)
             elif extension == ".pdf":
                 document_text = extract_text_from_pdf(file_path)
@@ -260,26 +242,16 @@ def save_state(state: Dict[str, float]) -> None:
     except Exception as e:
         logger.error(f"Ошибка сохранения состояния: {e}")
 
-def extract_text_from_docx(file_path: str) -> Optional[str]:
-    """Извлекает элементы из .docx файла с помощью unstructured."""
-    try:
-        elements = partition_docx(filename=file_path, infer_table_structure=True)
-        text_content = "\n\n".join([str(el) for el in elements])
-        return text_content.strip() if text_content else None
-    except Exception as e:
-        logger.error(f"  - ❌ Ошибка извлечения текста из {os.path.basename(file_path)}: {e}")
-        return None
-
 def convert_doc_to_docx(file_path: str) -> Optional[str]:
-    """Конвертирует .doc в .docx."""
+    """Конвертирует .doc в .docx и удаляет оригинальный .doc файл."""
     if sys.platform != "win32":
-        logger.warning("Конверсия .doc доступна только на Windows")
+        logger.warning(f"  - ⚠️ Конверсия .doc доступна только на Windows: {os.path.basename(file_path)}")
         return None
     
     try:
         import win32com.client as win32
     except ImportError:
-        logger.error("win32com.client не доступен. Установите pywin32.")
+        logger.error("  - ❌ win32com.client не доступен. Установите pywin32 для конвертации .doc файлов.")
         return None
     
     word = None
@@ -287,16 +259,23 @@ def convert_doc_to_docx(file_path: str) -> Optional[str]:
         abs_path_doc = os.path.abspath(file_path)
         abs_path_docx = os.path.splitext(abs_path_doc)[0] + ".docx"
         
+        # Если .docx уже существует, удаляем .doc и возвращаем путь к .docx
         if os.path.exists(abs_path_docx):
+            logger.info(f"  - ✅ .docx уже существует, удаляем .doc: {os.path.basename(file_path)}")
+            os.remove(abs_path_doc)
             return abs_path_docx
             
-        logger.info(f"  - ⚙️ Конвертация .doc: {os.path.basename(file_path)}")
+        logger.info(f"  - 🔄 Конвертация .doc → .docx: {os.path.basename(file_path)}")
         
         word = win32.Dispatch("Word.Application")
         word.visible = False
         doc = word.Documents.Open(abs_path_doc)
         doc.SaveAs(abs_path_docx, FileFormat=12)
         doc.Close()
+        
+        # Удаляем оригинальный .doc файл после успешной конвертации
+        os.remove(abs_path_doc)
+        logger.info(f"  - ✅ Конвертация завершена, .doc файл удален: {os.path.basename(file_path)}")
         
         return abs_path_docx
         
@@ -309,6 +288,17 @@ def convert_doc_to_docx(file_path: str) -> Optional[str]:
                 word.Quit()
             except:
                 pass  # Игнорируем ошибки при закрытии Word
+
+def extract_text_from_docx(file_path: str) -> Optional[str]:
+    """Извлекает элементы из .docx файла с помощью unstructured."""
+    try:
+        elements = partition_docx(filename=file_path, infer_table_structure=True)
+        text_content = "\n\n".join([str(el) for el in elements])
+        return text_content.strip() if text_content else None
+    except Exception as e:
+        logger.error(f"  - ❌ Ошибка извлечения текста из {os.path.basename(file_path)}: {e}")
+        return None
+
 
 def extract_text_from_pdf(file_path: str) -> Optional[str]:
     """Извлекает текст из .pdf файла."""
@@ -331,17 +321,10 @@ def find_changed_files(docs_path: str, state: Dict[str, float]) -> List[str]:
     """Находит файлы, которые были созданы или изменены."""
     files_to_process = []
     
-    # Предварительная конвертация .doc в .docx
     for root, _, files in os.walk(docs_path):
         for filename in files:
-            if filename.lower().endswith(".doc") and not filename.startswith('~'):
-                convert_doc_to_docx(os.path.join(root, filename))
-    
-    # Основной обход для определения изменений
-    for root, _, files in os.walk(docs_path):
-        for filename in files:
-            # Пропускаем временные файлы и .doc
-            if filename.startswith('~') or filename.lower().endswith(".doc"):
+            # Пропускаем временные файлы
+            if filename.startswith('~'):
                 continue
             
             file_path = os.path.join(root, filename)
@@ -403,8 +386,19 @@ def main() -> None:
         result = indexer.process_document(file_path)
         
         if result.success:
-            # Обновляем состояние только для успешно обработанных файлов
-            new_state[file_path] = os.path.getmtime(file_path)
+            # Для .doc файлов, которые были конвертированы, нужно обновить состояние для .docx
+            extension = Path(file_path).suffix.lower()
+            if extension == ".doc":
+                # .doc файл был удален, состояние обновляем для .docx
+                docx_path = os.path.splitext(file_path)[0] + ".docx"
+                if os.path.exists(docx_path):
+                    new_state[docx_path] = os.path.getmtime(docx_path)
+                # Удаляем запись о .doc файле из состояния
+                new_state.pop(file_path, None)
+            else:
+                # Обновляем состояние для обычных файлов
+                new_state[file_path] = os.path.getmtime(file_path)
+            
             successful_files += 1
             logger.info(f"  - ✅ Файл обработан, создано {result.chunks_count} векторов.")
         else:

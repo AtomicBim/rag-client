@@ -1,7 +1,6 @@
 import uvicorn
 import torch
-import logging
-import os
+import config
 from typing import List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status
@@ -9,18 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = config.setup_logging(__name__)
 
-# Конфигурация
-MODEL_PATH = os.getenv("MODEL_PATH", "./local_model/ru-en-RoSBERTa")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-HOST = "0.0.0.0"
-PORT = 8001
 
 class EmbeddingService:
     """Singleton класс для управления моделью эмбеддингов."""
@@ -40,7 +30,7 @@ class EmbeddingService:
             
         try:
             logger.info(f"Загрузка embedding-модели на устройство: {DEVICE.upper()}")
-            self._model = SentenceTransformer(MODEL_PATH, device=DEVICE)
+            self._model = SentenceTransformer(config.EMBEDDING_MODEL_PATH, device=DEVICE)
             logger.info("✅ Модель успешно загружена")
             return True
         except Exception as e:
@@ -67,7 +57,7 @@ class EmbeddingService:
         return {
             "status": "initialized",
             "device": DEVICE,
-            "model_path": MODEL_PATH,
+            "model_path": config.EMBEDDING_MODEL_PATH,
             "model_name": getattr(self._model, "_model_name", "unknown")
         }
 
@@ -96,7 +86,7 @@ app = FastAPI(
 )
 
 # Настройка CORS
-allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
+allowed_origins = config.CORS_ORIGINS.split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -168,11 +158,11 @@ async def create_embedding(request: TextRequest):
         )
 
 if __name__ == "__main__":
-    logger.info(f"Запуск сервиса эмбеддингов на {HOST}:{PORT}")
+    logger.info(f"Запуск сервиса эмбеддингов на {config.EMBEDDING_SERVICE_HOST}:{config.EMBEDDING_SERVICE_PORT}")
     uvicorn.run(
         app, 
-        host=HOST, 
-        port=PORT,
+        host=config.EMBEDDING_SERVICE_HOST, 
+        port=config.EMBEDDING_SERVICE_PORT,
         log_level="info",
         access_log=True
     )

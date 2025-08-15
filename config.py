@@ -2,6 +2,7 @@
 Конфигурационные параметры для RAG-системы.
 """
 import os
+import logging
 
 # === Параметры Qdrant ===
 QDRANT_HOST: str = os.getenv("QDRANT_HOST", "192.168.42.188")
@@ -33,6 +34,11 @@ LOG_FORMAT: str = os.getenv(
     "LOG_FORMAT",
     "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+
+# === Параметры сервиса эмбеддингов ===
+EMBEDDING_SERVICE_HOST: str = os.getenv("EMBEDDING_SERVICE_HOST", "0.0.0.0")
+EMBEDDING_SERVICE_PORT: int = int(os.getenv("EMBEDDING_SERVICE_PORT", "8001"))
+CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000")
 
 def validate_config() -> bool:
     """Проверка конфигурации на корректность."""
@@ -89,3 +95,12 @@ def get_config_summary() -> dict:
             "openai_endpoint": OPENAI_API_ENDPOINT
         }
     }
+
+def setup_logging(name: str = __name__) -> logging.Logger:
+    """Настройка единого логирования для всех модулей."""
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL.upper()),
+        format=LOG_FORMAT,
+        force=True
+    )
+    return logging.getLogger(name)
