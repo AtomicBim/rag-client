@@ -13,6 +13,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from qdrant_client.http.models.models import PointStruct
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+import re
 from pypdf import PdfReader
 
 # Файл для хранения состояния индексации
@@ -27,6 +28,52 @@ class DocumentProcessingResult:
     success: bool
     chunks_count: int = 0
     error_message: str = ""
+
+class DocumentPreprocessor:
+    """Класс для предобработки и очистки текста документов."""
+    
+    def __init__(self):
+        # Паттерны для очистки текста
+        self.patterns = {
+            'extra_whitespace': re.compile(r'\s+'),
+            'page_numbers': re.compile(r'^\d+\s*$', re.MULTILINE),
+            'headers_footers': re.compile(r'^(Стр\.|Страница|Page)\s*\d+.*$', re.MULTILINE),
+            'email_pattern': re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),
+            'phone_pattern': re.compile(r'\+?[1-9]\d{1,14}'),
+            'url_pattern': re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
+        }
+    
+    def clean_text(self, text: str) -> str:
+        """Очистка и нормализация текста."""
+        if not text:
+            return ""
+            
+        # Удаляем лишние пробелы и переносы строк
+        text = self.patterns['extra_whitespace'].sub(' ', text)
+        
+        # Удаляем номера страниц
+        text = self.patterns['page_numbers'].sub('', text)
+        
+        # Удаляем колонтитулы
+        text = self.patterns['headers_footers'].sub('', text)
+        
+        # Нормализуем кавычки
+        text = text.replace('"', '"').replace('"', '"')
+        text = text.replace(''', "'").replace(''', "'")
+        
+        return text.strip()
+    
+    def extract_metadata(self, text: str, filename: str) -> dict:
+        """Извлечение метаданных для улучшения поиска."""
+        return {
+            'length': len(text),
+            'word_count': len(text.split()),
+            'has_emails': bool(self.patterns['email_pattern'].search(text)),
+            'has_phones': bool(self.patterns['phone_pattern'].search(text)),
+            'has_urls': bool(self.patterns['url_pattern'].search(text)),
+            'filename': filename,
+            'language': 'ru'  # Можно добавить автоопределение языка
+        }
     
 class DocumentIndexer:
     """Класс для индексации документов в векторную БД."""
@@ -34,10 +81,17 @@ class DocumentIndexer:
     def __init__(self):
         self.qdrant_client: Optional[QdrantClient] = None
         self.embedding_model: Optional[SentenceTransformer] = None
+        self.preprocessor = DocumentPreprocessor()
+        
+        # Оптимизированный text splitter с улучшенными разделителями
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=config.CHUNK_SIZE, 
             chunk_overlap=config.CHUNK_OVERLAP, 
-            separators=["\n\n", "\n", ".", " ", ""]
+            separators=config.CHUNK_SEPARATORS,
+            length_function=len,
+            is_separator_regex=False,
+            keep_separator=True,  # Сохраняем разделители для контекста
+            add_start_index=True  # Добавляем позицию в исходном тексте
         )
     
     def initialize_qdrant(self) -> bool:
@@ -100,19 +154,45 @@ class DocumentIndexer:
         except Exception as e:
             logger.warning(f"  - ⚠️ Ошибка при удалении старых записей: {e}")
     
-    def create_embeddings_batch(self, chunks: List[str], filename: str, category: str) -> List[PointStruct]:
-        """Создание батча векторов для загрузки в Qdrant."""
+    def create_embeddings_batch(self, chunks: List[str], filename: str, category: str, metadata: dict = None) -> List[PointStruct]:
+        """Создание батча векторов для загрузки в Qdrant с улучшенными метаданными."""
         if not self.embedding_model:
             raise ValueError("Модель эмбеддингов не инициализирована")
             
-        embeddings = self.embedding_model.encode(chunks, show_progress_bar=False)
+        # Оптимизированное создание эмбеддингов
+        embeddings = self.embedding_model.encode(
+            chunks, 
+            show_progress_bar=False,
+            batch_size=32,
+            normalize_embeddings=True  # Нормализация для cosine similarity
+        )
         points = []
         
-        for chunk, embedding in zip(chunks, embeddings):
+        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+            # Расширенные метаданные для каждого чанка
+            payload = {
+                "text": chunk,
+                "source_file": filename,
+                "category": category,
+                "chunk_index": i,
+                "chunk_length": len(chunk),
+                "chunk_word_count": len(chunk.split())
+            }
+            
+            # Добавляем метаданные документа
+            if metadata:
+                payload.update({
+                    "doc_length": metadata.get("length", 0),
+                    "doc_word_count": metadata.get("word_count", 0),
+                    "has_emails": metadata.get("has_emails", False),
+                    "has_phones": metadata.get("has_phones", False),
+                    "language": metadata.get("language", "ru")
+                })
+            
             point = PointStruct(
                 id=str(uuid.uuid4()),
                 vector=embedding.tolist(),
-                payload={"text": chunk, "source_file": filename, "category": category}
+                payload=payload
             )
             points.append(point)
             
@@ -193,17 +273,26 @@ class DocumentIndexer:
                     error_message="Не удалось извлечь текст из документа"
                 )
             
-            # Разбиение на чанки
-            chunks = self.text_splitter.split_text(document_text)
+            # Предобработка текста
+            cleaned_text = self.preprocessor.clean_text(document_text)
+            if not cleaned_text:
+                return DocumentProcessingResult(
+                    success=False, 
+                    error_message="Текст пуст после предобработки"
+                )
+            
+            # Разбиение на чанки с улучшенным алгоритмом
+            chunks = self.text_splitter.split_text(cleaned_text)
             if not chunks:
                 return DocumentProcessingResult(
                     success=False, 
                     error_message="Не удалось разбить текст на чанки"
                 )
             
-            # Создание эмбеддингов
+            # Создание эмбеддингов с дополнительными метаданными
             category = os.path.basename(os.path.dirname(file_path))
-            points = self.create_embeddings_batch(chunks, filename, category)
+            metadata = self.preprocessor.extract_metadata(cleaned_text, filename)
+            points = self.create_embeddings_batch(chunks, filename, category, metadata)
             
             # Загрузка в Qdrant
             if not self.upload_points_to_qdrant(points):
