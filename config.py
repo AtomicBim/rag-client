@@ -18,9 +18,9 @@ EMBEDDING_DIMENSION: int = int(os.getenv("EMBEDDING_DIMENSION", "1024"))
 
 # === Параметры обработки документов ===
 DOCS_ROOT_PATH: str = os.getenv("DOCS_ROOT_PATH", "./rag-source")
-CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "1000"))
-CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "200"))
-BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "512"))
+CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "800"))
+CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "60"))
+BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "256"))
 
 # === Внешние API ===
 OPENAI_API_ENDPOINT: str = os.getenv(
